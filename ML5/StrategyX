@@ -1,0 +1,153 @@
+#include <Trade\Trade.mqh>
+
+input double lot_size = 0.5;                // User input for lot size
+input double stop_loss_pips = 100;            // Stop loss in pips
+input ENUM_TIMEFRAMES timeframe = PERIOD_M5; // Default timeframe is M5
+input int vwap_period = 14;                 // VWAP period
+input int rsi_length = 14;                  // RSI period
+input int rsi_oversold = 30;                // RSI oversold level
+input int rsi_overbought = 70;              // RSI overbought level
+input double risk_reward_ratio = 3.0;       // User input for risk-reward ratio
+input int max_open_trades = 5;              // Maximum number of open trades
+
+double vwap_value;
+double rsi_value;
+CTrade trade;
+int total_open_trades = 0; // Declaration and initialization of total_open_trades variable
+
+// Advanced Stop Loss parameters
+input bool MoveToBreakEven = true;
+input double BreakEvenTrigger = 10.0; // in pips
+input double BreakEvenAdd = 5.0;      // in pips
+input bool TrailingStop = true;
+input double TrailingStopTrigger = 20.0;    // in pips
+input double TrailingStopMovement = 10.0;   // in pips
+input double TrailingStopTrailValue = 5.0;  // in pips
+
+int OnInit()
+{
+    Print("Initializing the EA...");
+
+    // Set expert magic number for identification of positions
+    trade.SetExpertMagicNumber(113141);
+
+    // Set margin mode
+    trade.SetMarginMode();
+
+    // Set filling mode
+    trade.SetTypeFillingBySymbol(_Symbol);
+
+    // Set deviation in points
+    trade.SetDeviationInPoints(30);
+
+    // Set logging mode
+    trade.LogLevel(LOG_LEVEL_ALL);
+
+    // Initialization done
+    return INIT_SUCCEEDED;
+}
+
+void OnTick()
+{
+    // Print a message indicating the EA is waiting for trading
+    Print("The EA is waiting for trading");
+
+    // Calculate VWAP
+   
+    double vwap_value = iCustom(_Symbol, timeframe, "Vwap", 0, 0);
+    Comment(vwap_value);
+
+
+    // Calculate RSI
+    rsi_value = iRSI(_Symbol, timeframe, rsi_length, 0);
+
+    // Define entry conditions
+    double close_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    bool buy_condition = close_price > vwap_value && rsi_value > rsi_oversold;
+    bool sell_condition = close_price < vwap_value && rsi_value < rsi_overbought;
+
+    // Execute buy trades
+    if (buy_condition && total_open_trades < max_open_trades) {
+        double entry_price = close_price; // Entry price
+        double stop_loss_price = entry_price - stop_loss_pips * Point(); // Calculate stop loss price
+        double take_profit = entry_price + stop_loss_pips * risk_reward_ratio * Point(); // Calculate take profit
+
+        if (stop_loss_price > 0 && take_profit > 0) {
+            ulong last_trade_ticket = trade.Buy(lot_size, _Symbol, close_price, stop_loss_price, take_profit, "");
+            if (last_trade_ticket != 0) {
+                total_open_trades++;
+                // Set Advanced Stop Loss
+                SetAdvancedStopLoss(last_trade_ticket, entry_price);
+            }
+            else {
+                Print("Failed to execute buy trade. Please check order parameters.");
+            }
+        }
+        else {
+            Print("Invalid stop loss or take profit value for buy trade. Please adjust.");
+        }
+    }
+    // Execute sell trades
+    else if (sell_condition && total_open_trades < max_open_trades) {
+        double entry_price = close_price; // Entry price
+        double stop_loss_price = entry_price + stop_loss_pips * Point(); // Calculate stop loss price
+        double take_profit = entry_price - stop_loss_pips * risk_reward_ratio * Point(); // Calculate take profit
+
+        if (stop_loss_price > 0 && take_profit > 0) {
+            ulong last_trade_ticket = trade.Sell(lot_size, _Symbol, close_price, stop_loss_price, take_profit, "");
+            if (last_trade_ticket != 0) {
+                total_open_trades++;
+                // Set Advanced Stop Loss
+                SetAdvancedStopLoss(last_trade_ticket, entry_price);
+            }
+            else {
+                Print("Failed to execute sell trade. Please check order parameters.");
+            }
+        }
+        else {
+            Print("Invalid stop loss or take profit value for sell trade. Please adjust.");
+        }
+    }
+}
+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+{
+    // Event handler
+}
+
+// Function to set Advanced Stop Loss
+void SetAdvancedStopLoss(ulong last_trade_ticket, double entry_price)
+{
+    double stop_loss_price = entry_price - stop_loss_pips * Point();
+    double break_even_price = 0.0;
+    double trailing_stop_price = 0.0;
+
+    if (MoveToBreakEven && total_open_trades > 0) {
+        if (PositionsTotal() > 0) {
+            double trade_entry_price;
+            if (PositionSelectByTicket(last_trade_ticket)) {
+                trade_entry_price = PositionGetDouble(POSITION_PRICE_OPEN);
+            }
+
+            if (trade_entry_price < 0) {
+                break_even_price = trade_entry_price;
+                if (trade.PositionModify(last_trade_ticket, break_even_price, stop_loss_price)) {
+                    Print("Break Even set for position ", last_trade_ticket, " at price ", break_even_price);
+                }
+            }
+        }
+    }
+
+    if (TrailingStop && total_open_trades > 0) {
+        double current_profit = PositionGetDouble(POSITION_PROFIT);
+        if (current_profit > TrailingStopTrigger * Point()) {
+            trailing_stop_price = SymbolInfoDouble(_Symbol, SYMBOL_BID) - TrailingStopTrailValue * Point();
+            if (trade.PositionModify(last_trade_ticket, 0, trailing_stop_price)) {
+                Print("Trailing Stop set for position ", last_trade_ticket, " at price ", trailing_stop_price);
+            }
+        }
+    }
+}
